@@ -2,7 +2,7 @@
 // Cache-first, fully offline. The app is a single self-contained HTML document
 // (all data/CSS/JS inline) so the precache list is deliberately short.
 // Bump CACHE_VERSION on every deploy to roll caches over cleanly.
-const CACHE_VERSION = 'hffg-dgp-v12';
+const CACHE_VERSION = 'hffg-dgp-v13';
 const PRECACHE_URLS = [
   './',
   './index.html',
