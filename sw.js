@@ -2,23 +2,23 @@
 // Cache-first, fully offline. The app is a single self-contained HTML document
 // (all data/CSS/JS inline) so the precache list is deliberately short.
 // Bump CACHE_VERSION on every deploy to roll caches over cleanly.
-const CACHE_VERSION = 'hffg-dgp-v13';
+const CACHE_VERSION = 'hffg-dgp-v11';
 const PRECACHE_URLS = [
   './',
   './index.html',
   './manifest.json',
-  './icons/icon-48.png?v=13',
-  './icons/icon-72.png?v=13',
-  './icons/icon-96.png?v=13',
-  './icons/icon-128.png?v=13',
-  './icons/icon-144.png?v=13',
-  './icons/icon-152.png?v=13',
-  './icons/icon-192.png?v=13',
-  './icons/icon-384.png?v=13',
-  './icons/icon-512.png?v=13',
-  './icons/icon-maskable-192.png?v=13',
-  './icons/icon-maskable-512.png?v=13',
-  './icons/apple-touch-icon.png?v=13',
+  './icons/icon-48.png',
+  './icons/icon-72.png',
+  './icons/icon-96.png',
+  './icons/icon-128.png',
+  './icons/icon-144.png',
+  './icons/icon-152.png',
+  './icons/icon-192.png',
+  './icons/icon-384.png',
+  './icons/icon-512.png',
+  './icons/icon-maskable-192.png',
+  './icons/icon-maskable-512.png',
+  './icons/apple-touch-icon.png',
   './icons/favicon.ico',
 ];
 

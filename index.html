@@ -319,6 +319,36 @@ table.matrix th.rowhead{text-align:right; padding-right:8px;}
 }
 .note-box strong{color:var(--text);}
 
+/* ---------- Global search (command palette) ---------- */
+.gs-trigger{
+  display:flex; align-items:center; gap:6px; border:1px solid var(--border-strong); background:var(--panel);
+  border-radius:var(--radius); padding:5px 9px; font-size:11.5px; color:var(--text-dim); cursor:pointer; flex:0 0 auto;
+}
+.gs-trigger:hover{background:var(--panel-alt); color:var(--text);}
+.gs-hint{font-size:10px; color:var(--text-faint); border:1px solid var(--border-strong); border-radius:2px; padding:1px 5px; font-family:var(--mono);}
+.gs-overlay{position:fixed; inset:0; background:rgba(15,22,32,0.45); z-index:120; display:none;}
+.gs-overlay.open{display:block;}
+.gs-box{
+  position:fixed; top:8vh; left:50%; transform:translateX(-50%); width:640px; max-width:92vw; max-height:76vh;
+  background:var(--panel); border:1px solid var(--border-strong); border-radius:var(--radius);
+  box-shadow:0 12px 40px rgba(20,30,45,0.28); display:none; flex-direction:column; overflow:hidden; z-index:121;
+}
+.gs-box.open{display:flex;}
+.gs-input-row{display:flex; align-items:center; gap:9px; padding:12px 14px; border-bottom:1px solid var(--border); flex:0 0 auto;}
+.gs-input-row__icon{opacity:.55; font-size:13px;}
+.gs-input{flex:1; border:none; outline:none; font-size:14px; font-family:var(--mono); background:transparent; color:var(--text);}
+.gs-results{overflow-y:auto; flex:1;}
+.gs-group{padding:6px 0;}
+.gs-group__label{font-size:10px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:var(--text-dim); padding:6px 14px 4px;}
+.gs-item{display:flex; align-items:center; gap:10px; padding:7px 14px; cursor:pointer;}
+.gs-item.active, .gs-item:hover{background:var(--accent-bg);}
+.gs-item__icon{width:16px; text-align:center; color:var(--text-dim); font-size:12px; flex:0 0 auto;}
+.gs-item__main{flex:1; min-width:0;}
+.gs-item__title{font-size:12.3px; font-weight:600; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.gs-item__sub{font-size:11px; color:var(--text-dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:1px;}
+.gs-empty{padding:26px 14px; text-align:center; color:var(--text-faint); font-size:12px;}
+mark.gs-mark{background:var(--yellow-bg); color:var(--yellow); padding:0 1px; border-radius:1px; font-weight:700;}
+
 /* ---------- Packing instruction structured table ---------- */
 .pi-box{border:1px solid var(--border-strong); border-radius:var(--radius); overflow:hidden;}
 .pi-box__head{background:var(--accent-bg); border-bottom:1px solid var(--border-strong); padding:8px 12px; text-align:center;}
@@ -458,6 +488,9 @@ table.notoc-table input:focus{outline:2px solid var(--accent-dim); outline-offse
   .nav-backdrop.open{opacity:1; pointer-events:auto;}
   .shell{position:relative;}
   .topbar__source{display:none;} /* low-value on a phone; keeps the header from wrapping to 3 lines */
+  .gs-trigger__label, .gs-trigger .gs-hint{display:none;}
+  .gs-trigger{padding:6px 8px;}
+  .gs-box{top:0; width:100%; max-width:100%; height:100%; max-height:100%; border-radius:0; border:none;}
 
   /* dense multi-column tables become stacked cards */
   table.dtable thead{display:none;}
@@ -540,6 +573,144 @@ function searchDg(query, limit){
   }
   results.sort((a,b)=> b.score - a.score || a.d.un.localeCompare(b.d.un));
   return results.slice(0, limit).map(r=>r.d);
+}
+
+// ---- global search (command palette) ----
+// Searches across every dataset already resident in memory: UN numbers/names,
+// Special Provisions (id, summary, full text), Packing Instructions, ERG
+// digits/letters, HFFG chapter/section text, and the glossary. Pure client-side
+// text matching — nothing fetched, so results are instant.
+function gsHighlight(text, q){
+  if(!text) return '';
+  const idx = text.toUpperCase().indexOf(q.toUpperCase());
+  if(idx < 0) return esc(text);
+  return esc(text.slice(0,idx)) + '<mark class="gs-mark">' + esc(text.slice(idx, idx+q.length)) + '</mark>' + esc(text.slice(idx+q.length));
+}
+function gsExcerpt(text, q, radius){
+  radius = radius || 55;
+  const upper = text.toUpperCase(), uq = q.toUpperCase();
+  const idx = upper.indexOf(uq);
+  if(idx < 0){
+    const cut = text.slice(0, radius*2).replace(/\s+/g,' ').trim();
+    return esc(cut) + (text.length > radius*2 ? '…' : '');
+  }
+  const start = Math.max(0, idx-radius), end = Math.min(text.length, idx+q.length+radius);
+  const snippet = text.slice(start, end).replace(/\s+/g,' ').trim();
+  return (start>0?'…':'') + gsHighlight(snippet, q) + (end<text.length?'…':'');
+}
+function gsIconFor(kind){
+  return {dg:'◧', sp:'§', pi:'⊞', erg:'⚑', chapter:'📖', glossary:'A'}[kind] || '•';
+}
+function computeGlobalSearchResults(q){
+  const qU = q.toUpperCase();
+  const groups = [];
+
+  const dgResults = searchDg(q, 8);
+  if(dgResults.length) groups.push({label:'UN Numbers', items: dgResults.map(d => ({
+    kind:'dg', dg:d,
+    title: gsHighlight(d.un + ' — ' + d.psn, q),
+    sub: (d.class||'—') + (d.subrisk?(' +'+d.subrisk):'') + (d.pg?(' · PG '+d.pg):''),
+  }))});
+
+  const spIds = Object.keys(SP_DATA).filter(id => {
+    const sp = SP_DATA[id];
+    return id.toUpperCase().includes(qU) || sp.summary.toUpperCase().includes(qU) || sp.fullText.toUpperCase().includes(qU);
+  }).sort((a,b) => {
+    const rank = id => id.toUpperCase()===qU ? 0 : id.toUpperCase().startsWith(qU) ? 1 : SP_DATA[id].summary.toUpperCase().includes(qU) ? 2 : 3;
+    return rank(a) - rank(b);
+  }).slice(0,8);
+  if(spIds.length) groups.push({label:'Special Provisions', items: spIds.map(id => {
+    const sp = SP_DATA[id];
+    const inSummary = sp.summary.toUpperCase().includes(qU);
+    return {kind:'sp', spId:id, title: gsHighlight(id, q), sub: inSummary ? gsHighlight(sp.summary, q) : gsExcerpt(sp.fullText, q)};
+  })});
+
+  const piCodes = Object.keys(PI_DATA).filter(c => c.toUpperCase().includes(qU)).slice(0,6);
+  if(piCodes.length) groups.push({label:'Packing Instructions', items: piCodes.map(c => ({
+    kind:'pi', code:c, title: gsHighlight('Packing Instruction ' + c, q),
+    sub: PI_DATA[c].structured ? 'HFFG Annex 7' : 'External reference — IATA-DGR',
+  }))});
+
+  const ergItems = [];
+  Object.keys(ERG_DATA.digits).forEach(n => {
+    const d = ERG_DATA.digits[n];
+    if(n === q.trim() || d.risk.toUpperCase().includes(qU)) ergItems.push({kind:'erg', erg:'n'+n, title:'Drill '+n, sub: gsHighlight(d.risk, q)});
+  });
+  Object.keys(ERG_DATA.letters).forEach(l => {
+    if(l.toUpperCase() === qU || ERG_DATA.letters[l].toUpperCase().includes(qU)) ergItems.push({kind:'erg', erg:null, title:'Drill letter '+l, sub: gsHighlight(ERG_DATA.letters[l], q)});
+  });
+  if(ergItems.length) groups.push({label:'ERG', items: ergItems.slice(0,6)});
+
+  const chapItems = [];
+  CHAPTER_DATA.forEach(ch => {
+    ch.sections.forEach(s => {
+      const titleHit = s.title.toUpperCase().includes(qU);
+      let paraHit = null;
+      if(!titleHit){
+        for(const p of (s.paras||[])){ if(p.text.toUpperCase().includes(qU)){ paraHit = p.text; break; } }
+      }
+      if(titleHit || paraHit){
+        chapItems.push({kind:'chapter', num: ch.num,
+          title: gsHighlight(s.num + ' ' + s.title, q),
+          sub: paraHit ? gsExcerpt(paraHit, q) : ('Chapter ' + ch.num + ' — ' + ch.title)});
+      }
+    });
+  });
+  if(chapItems.length) groups.push({label:'Chapters & Sections', items: chapItems.slice(0,8)});
+
+  const glMatches = GLOSSARY_DATA.filter(g => g.term.toUpperCase().includes(qU) || g.definition.toUpperCase().includes(qU)).slice(0,6);
+  if(glMatches.length) groups.push({label:'Glossary (Definitioner)', items: glMatches.map(g => ({
+    kind:'glossary', title: gsHighlight(g.term, q), sub: gsExcerpt(g.definition, q),
+  }))});
+
+  return groups;
+}
+function gsFlatten(groups){
+  const flat = [];
+  groups.forEach(g => g.items.forEach(it => flat.push(it)));
+  return flat;
+}
+function renderGsItem(it, idx){
+  const active = idx === state.globalSearchActiveIndex;
+  let dataAttrs = `data-kind="${it.kind}"`;
+  if(it.kind==='dg') dataAttrs += ` data-un="${esc(it.dg.un)}" data-cls="${esc(it.dg.class||'')}" data-sub="${esc(it.dg.subrisk||'')}" data-pg="${esc(it.dg.pg||'')}"`;
+  else if(it.kind==='sp') dataAttrs += ` data-sp="${esc(it.spId)}"`;
+  else if(it.kind==='pi') dataAttrs += ` data-pi="${esc(it.code)}"`;
+  else if(it.kind==='erg') dataAttrs += ` data-erg="${esc(it.erg||'')}"`;
+  else if(it.kind==='chapter') dataAttrs += ` data-num="${esc(it.num)}"`;
+  return `<div class="gs-item ${active?'active':''}" data-action="gsSelect" ${dataAttrs} data-idx="${idx}">
+    <div class="gs-item__icon">${gsIconFor(it.kind)}</div>
+    <div class="gs-item__main"><div class="gs-item__title">${it.title}</div><div class="gs-item__sub">${it.sub}</div></div>
+  </div>`;
+}
+function renderGsGroup(g, flat){
+  return `<div class="gs-group"><div class="gs-group__label">${esc(g.label)}</div>${g.items.map(it => renderGsItem(it, flat.indexOf(it))).join('')}</div>`;
+}
+function renderGsResultsHtml(){
+  const q = state.globalSearchQuery.trim();
+  if(q.length === 0) return `<div class="gs-empty">Type to search across the whole HFFG dataset — UN numbers, Special Provisions, packing instructions, ERG codes, chapters and the glossary.</div>`;
+  if(q.length < 2) return `<div class="gs-empty">Type at least 2 characters.</div>`;
+  const groups = computeGlobalSearchResults(q);
+  const flat = gsFlatten(groups);
+  if(!flat.length) return `<div class="gs-empty">No matches for “${esc(q)}”.</div>`;
+  return groups.map(g => renderGsGroup(g, flat)).join('');
+}
+function renderGlobalSearch(){
+  const open = state.globalSearchOpen;
+  return `
+  <div class="gs-overlay ${open?'open':''}" data-action="closeGlobalSearch"></div>
+  <div class="gs-box ${open?'open':''}">
+    <div class="gs-input-row">
+      <span class="gs-input-row__icon">🔍</span>
+      <input id="globalSearchInput" class="gs-input" placeholder="Search UN numbers, Special Provisions, packing instructions, ERG, chapters, glossary…" value="${esc(state.globalSearchQuery)}" autocomplete="off"/>
+      <span class="gs-hint">Esc</span>
+    </div>
+    <div class="gs-results">${open ? renderGsResultsHtml() : ''}</div>
+  </div>`;
+}
+function renderGlobalSearchResultsOnly(){
+  const el = document.querySelector('.gs-box .gs-results');
+  if(el) el.innerHTML = renderGsResultsHtml();
 }
 
 // ---- classification helpers ----
@@ -892,6 +1063,9 @@ const state = {
   matrixSelectedCell: null,
   loadUidSeq: 1,
   mobileNavOpen: false,
+  globalSearchOpen: false,
+  globalSearchQuery: '',
+  globalSearchActiveIndex: 0,
   checklist: {answers:{}, meta:{comments:'', decision:null, checkedBy:'', signature:'', place:'', date:'', time:''}},
   notoc: {header:{flightRes:'', departureDate:'', preparedBy:'', airportDep:'', airportDest:'', authorizations:'', page:'1', pages:'1'}, rows:[], additionalInfo:'', flightChief:'', pilotInCommand:''},
 };
@@ -1033,6 +1207,10 @@ function loadLoadFromStorage(){
 function render(){
   document.getElementById('app').innerHTML = renderShell();
   attachEvents();
+  if(state.globalSearchOpen){
+    const inp = document.getElementById('globalSearchInput');
+    if(inp) inp.focus();
+  }
 }
 
 function renderShell(){
@@ -1046,6 +1224,7 @@ function renderShell(){
     </div>
   </div>
   ${renderDrawer()}
+  ${renderGlobalSearch()}
   `;
 }
 
@@ -1092,6 +1271,7 @@ function renderTopbar(){
       <span class="topbar__title">${titles[state.activeView] || ''}</span>
       <span class="topbar__meta">${state.load.length} item${state.load.length===1?'':'s'} in load · Mode: ${state.aircraftMode === 'passenger' ? 'Passenger aircraft' : 'Cargo / CAO'}</span>
     </div>
+    <button class="gs-trigger" data-action="openGlobalSearch" title="Search HFFG">🔍 <span class="gs-trigger__label">Search HFFG</span> <span class="gs-hint">⌘K</span></button>
     <div class="topbar__source">HFFG · 1 Mars 2022 · decision support — not a flight authorization</div>
   </div>`;
 }
@@ -2013,6 +2193,26 @@ function attachEvents(){
       case 'openAnnexExternalDrawer': state.drawer = {type:'annexExternal', payload: el.dataset.num}; render(); break;
       case 'openErgFromDrawer': state.activeView='erg'; state.ergExpand = 'n' + (el.dataset.erg.match(/^\d+/)||[''])[0]; state.drawer=null; render(); break;
       case 'closeDrawer': state.drawer = null; render(); break;
+      case 'openGlobalSearch': state.globalSearchOpen = true; state.globalSearchQuery=''; state.globalSearchActiveIndex=0; render(); break;
+      case 'closeGlobalSearch': state.globalSearchOpen = false; render(); break;
+      case 'gsSelect': {
+        const kind = el.dataset.kind;
+        state.globalSearchOpen = false;
+        if(kind==='dg'){
+          const dg = findDgByFingerprint(el.dataset.un, el.dataset.cls, el.dataset.sub, el.dataset.pg);
+          if(dg) state.drawer = {type:'dg', payload:{dg}};
+        } else if(kind==='sp'){
+          state.drawer = {type:'sp', payload: el.dataset.sp};
+        } else if(kind==='pi'){
+          state.drawer = {type:'pi', payload: el.dataset.pi};
+        } else if(kind==='erg'){
+          state.activeView = 'erg'; state.ergExpand = el.dataset.erg || null; state.drawer = null;
+        } else if(kind==='chapter'){
+          state.drawer = {type:'chapter', payload: el.dataset.num};
+        }
+        render();
+        break;
+      }
       case 'dbSort': {
         if(state.dbSort === el.dataset.key) state.dbSortDir *= -1; else { state.dbSort = el.dataset.key; state.dbSortDir = 1; }
         render();
@@ -2086,7 +2286,8 @@ function attachEvents(){
 
   app.addEventListener('input', (e) => {
     const el = e.target;
-    if(el.id === 'dgSearchInput'){ state.searchQuery = el.value; renderSearchOnly(); }
+    if(el.id === 'globalSearchInput'){ state.globalSearchQuery = el.value; state.globalSearchActiveIndex = 0; renderGlobalSearchResultsOnly(); }
+    else if(el.id === 'dgSearchInput'){ state.searchQuery = el.value; renderSearchOnly(); }
     else if(el.id === 'dbSearchInput'){ state.dbQuery = el.value; renderViewOnly(); }
     else if(el.id === 'spSearchInput'){ state.spQuery = el.value; renderViewOnly(); }
     else if(el.id === 'piSearchInput'){ state.piQuery = el.value; renderViewOnly(); }
@@ -2130,6 +2331,31 @@ function attachEvents(){
 
   // keep focus on search input across partial re-renders
   document.addEventListener('keydown', (e) => {
+    if((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k'){
+      e.preventDefault();
+      state.globalSearchOpen = true; state.globalSearchQuery=''; state.globalSearchActiveIndex=0;
+      render();
+      return;
+    }
+    if(state.globalSearchOpen){
+      if(e.key === 'Escape'){ state.globalSearchOpen = false; render(); return; }
+      if(e.key === 'ArrowDown' || e.key === 'ArrowUp'){
+        e.preventDefault();
+        const items = document.querySelectorAll('.gs-box .gs-item');
+        if(!items.length) return;
+        state.globalSearchActiveIndex = Math.max(0, Math.min(items.length-1, state.globalSearchActiveIndex + (e.key==='ArrowDown'?1:-1)));
+        items.forEach((it,i)=> it.classList.toggle('active', i===state.globalSearchActiveIndex));
+        items[state.globalSearchActiveIndex].scrollIntoView({block:'nearest'});
+        return;
+      }
+      if(e.key === 'Enter'){
+        e.preventDefault();
+        const items = document.querySelectorAll('.gs-box .gs-item');
+        if(items[state.globalSearchActiveIndex]) items[state.globalSearchActiveIndex].click();
+        return;
+      }
+      return;
+    }
     if(e.key === 'Escape' && state.drawer){ state.drawer = null; render(); }
   });
 }
